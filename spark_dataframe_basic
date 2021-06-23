@@ -1,0 +1,178 @@
+//read with csv options
+
+val ordersDF = spark.read.csv("/user/svc_npdscdataload/Sukanta/retail_db/orders")
+//or - with infer schema
+val ordersDF= spark.read.option("inferSchema","true").csv("/user/svc_npdscdataload/Sukanta/retail_db/orders")
+//or with custom schema
+val ordersDF = spark.read.schema("""order_id INT,order_date TIMESTAMP,
+	customer_id INT,order_status STRING""").
+	csv("/user/svc_npdscdataload/Sukanta/retail_db/orders")
+	
+//json to df	
+val ordJsonDF = spark.read.schema("""order_id INT,order_date TIMESTAMP,
+	order_customer_id INT,order_status STRING""").json("/user/svc_npdscdataload/Sukanta/retail_db_json/orders/part*")
+	
+//simple select & drop
+ordJsonDF.select("order_id","order_status").show(false)
+ordJsonDF.drop("order_customer_id").show(false)
+
+//concat order & customer id in a new column 
+//using select
+import org.apache.spark.sql.functions.{col,lit,concat}
+
+ordJsonDF.
+	select($"order_date",concat(col("order_id"),lit("-"),col("order_customer_id")).as("orderID-customerID"),$"order_status").
+	show(false)   
+	
+//using withcolumn
+
+ordJsonDF.
+	withColumn("orderID-customerID",concat($"order_id",lit("-"),$"order_customer_id")).
+	drop("order_id","order_customer_id").show(false)
+	
+//using selectExpr
+ordJsonDF.selectExpr("order_date","concat(order_id,'-',order_customer_id) AS ordercustomerID","order_status").show(false)
+
+//write to parquet format
+val ordItmJsonDF = spark.read.json("/user/svc_npdscdataload/Sukanta/retail_db_json/order_items")
+
+ordItmJsonDF.write.parquet("/user/svc_npdscdataload/Sukanta/retail_db_json/orderItemOP")
+//to write again in the same location use mode as overwrite
+ordItmJsonDF.limit(10).write.mode("overwrite").parquet("/user/svc_npdscdataload/Sukanta/retail_db_json/orderItemOP")
+
+//without compression and single file
+ordItmJsonDF.coalesce(1).write.
+	mode("overwrite").option("compression","none").parquet("/user/svc_npdscdataload/Sukanta/retail_db_json/orderItemOP")
+//can use gzip,lz4 compression as well
+
+//using save option instead of write
+ordItmJsonDF.coalesce(1).write.
+	mode("overwrite").option("compression","lz4").format("parquet").
+	save("/user/svc_npdscdataload/Sukanta/retail_db_json/orderItemOP")
+	
+//programmatically run hdfs command to validate writing
+import sys.process._
+"hdfs dfs -ls /user/svc_npdscdataload/Sukanta/retail_db_json/orderItemOP" !
+ 
+//validate written data by reading back
+ spark.read.parquet("/user/svc_npdscdataload/Sukanta/retail_db_json/orderItemOP").show(false)
+ 
+
+//spark sql functions walk through
+val employees = List(("aman", "sharma", "aman@gmail.co", 100000),("kanak", "rai", "kanak@gmail.edu", 120000 ),("vinod", "gupta", "vinod@gmail.edu", 140000 ),("rani", "arora", "rani@gmail.co", 160000 ),("punit", "singh", "punit@gmail.co", 160000 ))
+
+ val employeeDF = employees.toDF("first_name","last_name","emailID","salary")
+ 
+ //introduce new column natioanlity based on salary value
+ val empDF1 = employeeDF.withColumn("nationality",when($"salary" < 130000 , "Indian").otherwise("American"))
+ 
+ //group by natioanlity and show count of records
+ empDF1.groupBy($"nationality").count.show
+ 
+ //order by salary in ascending order and show
+  empDF1.orderBy("salary").show
++----------+---------+---------------+------+-----------+
+|first_name|last_name|        emailID|salary|nationality|
++----------+---------+---------------+------+-----------+
+|      aman|   sharma|  aman@gmail.co|100000|     Indian|
+|     kanak|      rai|kanak@gmail.edu|120000|     Indian|
+|     vinod|    gupta|vinod@gmail.edu|140000|   American|
+|      rani|    arora|  rani@gmail.co|160000|   American|
+|     punit|    singh| punit@gmail.co|160000|   American|
++----------+---------+---------------+------+-----------+
+
+//in descending order
+empDF1.orderBy(desc("salary")).show
+
+//select column names with dataframe name as qualifier instead of col or $
+ empDF1.select(upper(empDF1("last_name"))).show
+ 
+ //upper, lower & initcap
+ empDF1.withColumn("first_name",initcap($"first_name")).
+		withColumn("last_name",initcap($"last_name")).
+		withColumn("emailID",upper($"emailID")).
+		withColumn("nationality",lower($"nationality")).
+		show
+
+//substring
+empDF1.select(substring($"emailID",-3,3).as("email_extension"),$"first_name").show
+
+//complex withCOlumn with conditions
+val empDF2 = empDF1.withColumn("phone",when($"first_name" === "aman", "9988776543"))
+val empDF3 = empDF2.withColumn("phone",
+					(when($"first_name" === "kanak","7765432109").
+						otherwise(
+							when($"first_name" =!= "aman", "+1 241 339 6508").
+								otherwise($"phone")
+								)
+					)
+				)
+
+//print area code for US numbers
+empDF3.select(split($"phone"," ")(1).as("area_code")).filter($"area_code" =!= "null").show()
+
+//introduce new column employee id, use cast & length function
+ val empDF4 = empDF3.withColumn("employee_id",
+				($"salary".cast("long")/(length($"first_name")*length($"last_name")*length($"emailID"))).
+				cast("long"))
+				
+//left pad with 0 to make employee id 8 digit long
+empDF4.withColumn("employee_id",lpad($"employee_id",8,"0")).show()
+
+
+//date & time functions
+val datetime = List(("2019-01-22","2014-01-22 07:00:04.341"),("2019-04-07","2019-04-07 03:23:00.109"),("2020-12-06","2020-12-06 11:12:19.005"))
+
+val dateTimeDF = datetime.toDF("date","time")
+
+//add 10 days to date column and minus 7 days from date column
+val dateTimeDF1 = dateTimeDF.withColumn("future_date",date_add($"date",10)).
+		withColumn("past_date",date_sub($"date",7))
+		
+//get differnce between past and current date 
+dateTimeDF1.withColumn("longestGap",datediff(current_date,$"past_date")).show()
+
+//get months gap between time and current date
+dateTimeDF1.withColumn("monthsGap",months_between(current_timestamp,$"time").cast("int")).show()
+
+//add 7 months to date & 5 months to time column
+val dateTimeDF2 = dateTimeDF1.withColumn("date",add_months($"date",7)).withColumn("time_new",add_months($"time",5).cast("timestamp"))
+
+//find out how many days date column is lagging from beginning of the month and beginning of the year
+val dateTimeDF3 = dateTimeDF2.withColumn("monthFirst",trunc($"date","MM")).
+							withColumn("yearFirst",trunc($"date","yyyy")).
+							withColumn("monthDaysLag",datediff($"date",$"monthFirst")).
+							withColumn("yearDaysLag",datediff($"date",$"yearFirst"))
+							
+//find minute and hour lag from start of hour and day for time column
+val dateTimeDF4 = dateTimeDF3.withColumn("DayFirstHour",date_trunc("DAY",$"time")).
+							withColumn("HourFirstMinute",date_trunc("Hour",$"time")).
+							withColumn("HourLag",((unix_timestamp($"time")-unix_timestamp($"DayFirstHour"))/3600).cast("int")).
+							withColumn("MinuteLag",((unix_timestamp($"time")-unix_timestamp($"HourFirstMinute"))/60).cast("int"))
+							
+//extract year, month from date column
+dateTimeDF.withColumn("year",year($"date")).
+		withColumn("month",month($"date")).show(false)
+
+//extract year, month in yyyy-MonthName format 
+dateTimeDF.withColumn("yr_mnth",date_format($"date","yy-MMMM")).show()
+//also try yy-MMM and yyMMMM format
+
+//get day-of-week, day-of-month , day-of-year from time column
+dateTimeDF.withColumn("dow",dayofweek($"time")).
+		withColumn("dom",dayofmonth($"time")).
+		withColumn("doy",dayofyear($"time")).show()
+		
+//format timestamp in yyyyMMddhhmmss format
+dateTimeDF.withColumn("ts_formatted",date_format($"time","yyyyMMddhhmmss")).show()
+dateTimeDF.withColumn("ts_us_format",date_format($"time","dd MM yyyy hhmmss")).show()
+
+//manipulate with unixtimestamp
+val dateTimeDF5 = dateTimeDF.withColumn("dateId",date_format($"date","ddMMyyyy"))
+
+val dateTimeDF6 = dateTimeDF5.withColumn("time_unixts",unix_timestamp($"time")).
+							withColumn("date_unixts",unix_timestamp($"dateId","ddMMyyyy"))
+							
+//convert back from unix time stamp and get date, month and year separately
+dateTimeDF6.withColumn("month",from_unixtime($"time_unixts","MM")).
+			withColumn("year",from_unixtime($"time_unixts","yyyy")).show(false)
