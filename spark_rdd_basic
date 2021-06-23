@@ -1,0 +1,143 @@
+spark-shell --master yarn \
+	--num-executors 2 \
+	--executor-memory 512M 
+	
+//create spark context programatically	
+ val conf = new SparkConf().setAppName("SN APP").setMaster("yarn-client")
+ val sc = new SparkContext(conf)
+ 
+ spark.sparkContext.getConf.getAll
+ spark.sparkContext.getConf.getAll.foreach(println)
+
+//read from file in hdfs, create rdd
+val orders = sc.textFile("/user/svc_npdscdataload/Sukanta/retail_db/orders")
+val orderItems = spark.sparkContext.textFile("/user/svc_npdscdataload/Sukanta/retail_db/order_items")
+
+
+	
+//alternate option using load
+val ordersRDD = spark.read.schema("""order_id INT,order_date TIMESTAMP,
+	customer_id INT,order_status STRING""").format("csv").
+	load("/user/svc_npdscdataload/Sukanta/retail_db/orders")
+
+
+// read from file in local, create rdd
+
+//below 6 lines optional in case fromFile throws java.nio.charset.MalformedInputException:
+import scala.io.Codec
+import java.nio.charset.CodingErrorAction
+
+implicit val codec = Codec("UTF-8")
+codec.onMalformedInput(CodingErrorAction.REPLACE)
+codec.onUnmappableCharacter(CodingErrorAction.REPLACE)
+
+val productData = scala.io.Source.fromFile("/home/svc_npdscdataload/Sukanta/data/retail_db/products/part-00000").getLines.toList
+val productRdd = sc.parallelize(productData)
+
+//see data other than take,first, collect
+orders.takeSample(true,180)
+
+//use foreach after converting rdd to collection using collect / take..else foreach will be executed on executors and nothing will be shown on console
+
+//read json
+val orderJsonDF = spark.read.json("/user/svc_npdscdataload/Sukanta/retail_db_json/orders/part*")
+//alterntively -
+spark.sqlContext.load("/user/svc_npdscdataload/Sukanta/retail_db_json/orders/part*","json")
+
+
+
+//orders.first
+//res18: String = 1,2013-07-25 00:00:00.0,11599,CLOSED
+//convert date to int i.e. 2013-07-25 -> 20130725
+val ordDates = orders.map(rec => rec.split(",")(1).substring(0,10).replace("-","").toInt)
+
+//take order id & date as integer tuple
+val ordPairRdd = orders.map(rec => {
+      val recArr = rec.split(",")
+      (recArr(0).toInt,recArr(1).substring(0,10).replace("-","").toInt)
+      })
+	  
+// orderItems.first
+//res3: String = 1,1,957,1,299.98,299.98	  
+//second field is order id based on which join will happen with ordPairRdd.
+
+val ordItemPairRdd = orderItems.map(rec => {
+	(rec.split(",")(1).toInt,rec)})
+	
+	
+//difference between map and flatmap
+val inpList = List("Sample Text","To explain","Map and FlatMap difference","example")
+val listRdd = sc.parallelize(inpList)
+//split elements in a map and print
+listRdd.map(_.split(" ")).take(4).foreach(println)
+//[Ljava.lang.String;@22c5a7fd
+//[Ljava.lang.String;@38f57609
+//[Ljava.lang.String;@55b991e0
+//[Ljava.lang.String;@7bfb9224
+//it prints arrays
+
+//split elemets with flatmap and print
+listRdd.flatMap(_.split(" ")).take(10).foreach(println)
+
+val wordCount = listRdd.flatMap(_.split(" ")).map(w => (w,"")).countByKey
+
+
+//filter only closed orders
+orders.filter(rec => rec.split(",")(3) === "CLOSED").take(7).foreach(println)
+
+//get orders from 2013 septermber which are completed or closed
+val filteredOrdersRdd = orders.filter(rec => {
+	val date = rec.split(",")(1)
+	val status = rec.split(",")(3)
+	((status == "CLOSED" || status == "COMPLETE") && date.contains("2013-09"))
+	})
+	
+//print all possible status in dataset
+orders.map(rec => rec.split(",")(3)).distinct.collect.foreach(println)
+
+//join order & orderitems to get order date wise order item subtotal for each order id -- inner join
+val orderTuple = orders.map(rec => {
+	val ord = rec.split(",")
+	(ord(0).toInt,ord(1).substring(0,10))
+	})
+	
+val orderItemTuple = orderItems.map(rec => {
+	val ordItm = rec.split(",")
+	(ordItm(1).toInt,ordItm(4).toDouble)
+	})
+	
+orderTuple.join(orderItemTuple).sortByKey().take(10).foreach(println)
+//(1,(2013-07-25,299.98))
+//(2,(2013-07-25,199.99))
+//(2,(2013-07-25,250.0))
+//(2,(2013-07-25,129.99))
+//(4,(2013-07-25,49.98))
+//(4,(2013-07-25,299.95))
+//(4,(2013-07-25,150.0))
+//(4,(2013-07-25,199.92))
+//(5,(2013-07-25,299.98))
+//(5,(2013-07-25,299.95))
+
+//find orders where there are no order items present 
+val orderTuple = orders.map(rec => {
+	val ord = rec.split(",")
+	(ord(0).toInt,rec)
+	})
+
+val orderItemTuple = orderItems.map(rec => {
+	val ordItm = rec.split(",")
+	(ordItm(1).toInt,rec)
+	})
+	
+val missingOrderItemRdd = orderTuple.leftOuterJoin(orderItemTuple).filter(rec => rec._2._2 == None)
+val missingOrderDetails = missingOrderItemRdd.map(rec => rec._2._1)
+
+//get count of orders by their status
+orders.map(order => (order.split(",")(3),"")).countByKey
+
+//get total revenue from order items
+orderItems.map(oi => oi.split(",")(4).toFloat).reduce((total,revenue) => total+revenue)
+
+//get min and max revenue from order items
+orderItems.map(oi => oi.split(",")(4).toFloat).reduce((max,revenue) => if (max < revenue) revenue else max)
+orderItems.map(oi => oi.split(",")(4).toFloat).reduce((min,revenue) => if (min < revenue) min else revenue)
