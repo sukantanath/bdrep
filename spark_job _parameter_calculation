@@ -1,0 +1,22 @@
+TOTAL RESOURCES:
+180 nodes
+each node 20 cores
+each node 100GB ram
+
+1 core, 1GB for hadoop & os - so each node 19 core and 99GB ram
+
+JOB PARAMETER CALCULATIION:
+
+number of cores = 5 (works best as per industry standard)
+
+number of executors
+executor per node = 19 core per node/5 cores ~ 4 executor per node
+
+total executor = 4*180 = 720 (take 10% of that) ~ 72 executor 
+
+memory for each executor 
+
+memory per executor = memory in 1 node / executor in 1 node = 99 / 4 ~ 25GB (take half) ~ 12 GB
+
+memory over head = 12 * 0.07 = .84GB ~ 850MB
+ so 12 - .84 ~ 11 GB
